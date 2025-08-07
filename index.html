@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Airplane Adventure</title>
+<style>
+  :root{
+    --bg:#0b0d16;
+    --panel:#121528;
+    --text:#f4f7ff;
+    --muted:#aeb6d8;
+    --accent:#ffcc33; /* Mario-esque coin yellow */
+    --accent-red:#ff5252; /* vibrant red */
+    --accent-blue:#3da5ff; /* sky blue */
+    --accent-green:#34d399; /* lush green */
+  }
+  html,body{height:100%;margin:0;background:#090c14;color:var(--text);font:16px/1.5 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px}
+  .hud{
+    width:min(1100px,96vw);
+    display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;
+  }
+  .brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:.4px}
+  .brand .badge{
+    width:28px;height:28px;border-radius:6px;background:linear-gradient(180deg,var(--accent),#ffaa00);
+    box-shadow:0 4px 14px rgba(255,204,51,.4), inset 0 1px 0 rgba(255,255,255,.5);
+  }
+  .panel{
+    background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+    border:1px solid #1b1f3d;border-radius:12px;padding:10px;color:#dfe6ff
+  }
+  .controls{font-size:13px;color:var(--muted)}
+  .btn{background:linear-gradient(180deg,#ffd95a,#ffcc33);border:none;border-radius:10px;padding:8px 12px;font-weight:900;color:#1b213d;cursor:pointer;box-shadow:0 6px 16px rgba(255,204,51,.25), inset 0 1px 0 rgba(255,255,255,.5)}
+  .btn.secondary{background:linear-gradient(180deg,#5fa8ff,#3da5ff);color:#fff;box-shadow:0 6px 16px rgba(61,165,255,.25), inset 0 1px 0 rgba(255,255,255,.4)}
+  .canvas-wrap{
+    width:min(1100px,96vw);
+    position:relative;border-radius:14px;overflow:hidden;
+    border:1px solid #1b1f3d; box-shadow:0 18px 45px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05)
+  }
+  canvas{display:block;width:100%;height:auto;background:#0b0f20}
+  .overlay{
+    position:absolute;inset:0;display:none;align-items:center;justify-content:center;pointer-events:none
+  }
+  .card{
+    background:rgba(10,12,22,.85);backdrop-filter:blur(3px);
+    border:1px solid #273066;border-radius:12px;padding:16px 18px;text-align:center;
+    max-width:80%;
+  }
+  .card h2{margin:0 0 6px 0}
+  .big{font-size:42px;font-weight:900;letter-spacing:1px}
+  .statbar{
+    display:flex;gap:10px;align-items:center;flex-wrap:wrap
+  }
+  .pill{
+    padding:6px 10px;border-radius:999px;background:#0e1230;border:1px solid #24306b;font-weight:800;color:#eaf0ff
+  }
+  .sel{display:flex;flex-wrap:wrap;gap:6px}
+  .sel .btn{padding:6px 10px;font-size:13px}
+  .footer{width:min(1100px,96vw);display:flex;justify-content:space-between;align-items:center;color:#b8c2ea;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hud">
+    <div class="brand"><div class="badge"></div>Airplane Adventure</div>
+    <div class="panel statbar">
+      <div class="pill" id="scorePill">Score: 0</div>
+      <div class="pill" id="distPill">Distance: 0m</div>
+      <div class="pill" id="speedPill">Speed: 1.0x</div>
+      <div class="pill" id="envPill">City • Day • Clear • Spring</div>
+    </div>
+    <div class="sel">
+      <button class="btn" id="restartBtn">Restart (R)</button>
+      <button class="btn secondary" id="pauseBtn">Pause (P)</button>
+    </div>
+  </div>
+
+  <div class="canvas-wrap">
+    <canvas id="game" width="1024" height="576"></canvas>
+    <div class="overlay" id="pauseOverlay">
+      <div class="card">
+        <div class="big">Paused</div>
+        <div>Press P to resume</div>
+      </div>
+    </div>
+    <div class="overlay" id="gameoverOverlay">
+      <div class="card">
+        <h2>Game Over</h2>
+        <p id="finalStats" style="color:#cfd6ff;margin:6px 0 12px 0">Score 0 • Distance 0m</p>
+        <button class="btn" id="againBtn">Play Again (R)</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel controls" style="width:min(1100px,96vw)">
+    Controls: Arrow Up/Down or W/S to fly • Space to Dash • P to Pause • R to Restart
+  </div>
+
+  <div class="footer">
+    <div>Mario-inspired palette, cozy parallax, reactive weather.</div>
+    <div class="controls">Tip: Use Dash to punch through tight gaps, but it’s short!</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // Game constants
+  const W = canvas.width, H = canvas.height;
+  const GROUND = H*0.82;
+  const SKY_TOP = 0;
+
+  // Mario-style cheerful palettes for seasons
+  const SEASONS = ["spring","summer","autumn","winter"];
+  const WEATHER = ["clear","rain","snow","storm"];
+  const BIOMES = ["city","mountains","forest","desert"];
+  const TIMES = ["dawn","day","dusk","night"];
+
+  // State
+  let running = false, paused = false, gameover = false;
+  let t = 0; // ms
+  let score = 0;
+  let distance = 0;
+  let speed = 1.0; // multiplies base scroll
+  let baseScroll = 3.0;
+  let dashTime = 0, dashCD = 0;
+  let shake = 0;
+  let player;
+
+  // Environment cycles
+  let env = {
+    biome: "city",
+    time: "day",
+    weather: "clear",
+    season: "spring",
+    cycleTime: 0,
+    cycleDur: 18000, // 18s per stage
+    weatherTime: 0,
+    weatherDur: 12000,
+    biomeTime: 0,
+    biomeDur: 20000,
+    seasonTime: 0,
+    seasonDur: 30000
+  };
+
+  // Input
+  const keys = {};
+  window.addEventListener('keydown', e=>{
+    if (e.repeat) return;
+    keys[e.key.toLowerCase()] = true;
+
+    if (e.key.toLowerCase()==='p'){ togglePause(); }
+    if (e.key.toLowerCase()==='r'){ if (gameover) init(); else init(); }
+    if (e.code==='Space'){
+      if (!paused && !gameover) dash();
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+  // UI
+  const scorePill = document.getElementById('scorePill');
+  const distPill = document.getElementById('distPill');
+  const speedPill = document.getElementById('speedPill');
+  const envPill = document.getElementById('envPill');
+  const pauseOverlay = document.getElementById('pauseOverlay');
+  const gameoverOverlay = document.getElementById('gameoverOverlay');
+  const finalStats = document.getElementById('finalStats');
+  document.getElementById('pauseBtn').onclick = togglePause;
+  document.getElementById('restartBtn').onclick = ()=>init();
+  document.getElementById('againBtn').onclick = ()=>init();
+
+  function togglePause(){
+    if (gameover) return;
+    paused = !paused;
+    pauseOverlay.style.display = paused ? 'flex' : 'none';
+    if (!paused){ lastTs = performance.now(); requestAnimationFrame(loop); }
+  }
+
+  // Entities
+  const particles = [];
+  const obstacles = [];
+  const decor = [];
+
+  function init(){
+    running = true; paused = false; gameover = false;
+    pauseOverlay.style.display = 'none';
+    gameoverOverlay.style.display = 'none';
+    score = 0; distance = 0; speed = 1.0; t = 0; dashTime = 0; dashCD = 0; shake = 0;
+    env.biome = "city"; env.time = "day"; env.weather = "clear"; env.season = "spring";
+    env.cycleTime = 0; env.weatherTime = 0; env.biomeTime = 0; env.seasonTime = 0;
+    obstacles.length = 0; particles.length = 0; decor.length = 0;
+
+    // Player
+    player = {
+      x: W*0.18, y: H*0.45, vy: 0,
+      w: 70, h: 32,
+      alive: true,
+      inv: 0
+    };
+
+    // Seed some decor
+    for (let i=0;i<30;i++){
+      pushDecor(W*Math.random(), Math.random());
+    }
+
+    lastTs = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+  function rnd(a,b){ return a + Math.random()*(b-a); }
+
+  // Colors and lighting
+  function skyGradient(time, season){
+    // Smooth Mario-like cheerful palettes by time
+    const grad = ctx.createLinearGradient(0,0,0,H);
+    const pal = {
+      dawn:   ['#ff9a73','#ffd07a','#fff0b5'],
+      day:    ['#7ad1ff','#aee3ff','#e6f7ff'],
+      dusk:   ['#ff8aa6','#f9b384','#f7e4d1'],
+      night:  ['#0b0f2a','#111c3a','#1b2752']
+    };
+    // seasonal tint
+    const tints = {
+      spring: [0,0,0],
+      summer: [0,10,0],
+      autumn: [10,0,0],
+      winter: [-10,-10,0]
+    };
+    const tint = tints[season] || [0,0,0];
+    const cols = pal[time].map(c=>tintHex(c, tint));
+    grad.addColorStop(0, cols[0]);
+    grad.addColorStop(0.55, cols[1]);
+    grad.addColorStop(1, cols[2]);
+    return grad;
+  }
+
+  function tintHex(hex, [rT,gT,bT]){
+    const c = hex.replace('#','');
+    const r = clamp(parseInt(c.substring(0,2),16)+rT,0,255);
+    const g = clamp(parseInt(c.substring(2,4),16)+gT,0,255);
+    const b = clamp(parseInt(c.substring(4,6),16)+bT,0,255);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  // Parallax layers per biome
+  function drawParallax(biome, season, time, scroll){
+    // Back mountains/buildings
+    ctx.save();
+    ctx.globalAlpha = time==='night' ? 0.9 : 1.0;
+    const farSpeed = scroll*0.35;
+    const midSpeed = scroll*0.65;
+
+    // Layer colors (Mario-esque saturated)
+    const cols = {
+      city: ['#2a355f','#3a4680','#4b5aa6'],
+      mountains: ['#2b3e6b','#3e5c96','#5377ba'],
+      forest: ['#1e5a3a','#2b7f53','#3d9d69'],
+      desert: ['#7a5a2b','#9a6f34','#bf8a43']
+    }[biome];
+
+    // Far silhouettes
+    drawHills(cols[0], 80, 120, 0.25, farSpeed*0.6);
+    // Mid silhouettes
+    drawHills(cols[1], 140, 200, 0.35, farSpeed);
+    // Fore silhouettes
+    drawHills(cols[2], 200, 260, 0.45, midSpeed);
+
+    ctx.restore();
+  }
+
+  function drawHills(color, hmin, hmax, freq, shift){
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, GROUND);
+    for (let x=0;x<=W;x+=8){
+      const y = GROUND - (Math.sin((x+shift)*0.005*freq)*0.5+0.5)* (hmax-hmin) - hmin;
+      ctx.lineTo(x,y);
+    }
+    ctx.lineTo(W,GROUND);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Foreground ground/bottom
+  function drawGround(biome, season){
+    let color = '#3aa34f'; // default foresty
+    if (biome==='city') color = '#4f5470';
+    if (biome==='mountains') color = '#5577aa';
+    if (biome==='forest') color = '#3aa34f';
+    if (biome==='desert') color = '#d6a14d';
+
+    // seasonal modulation
+    if (season==='autumn' && biome==='forest') color = '#d68b4d';
+    if (season==='winter' && biome!=='desert') color = '#a9b7cc';
+
+    ctx.fillStyle = color;
+    ctx.fillRect(0,GROUND, W, H-GROUND);
+
+    // accents
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    for (let i=0;i<6;i++){
+      const x = (i*180 + (t*0.03))% (W+200) - 200;
+      ctx.fillRect(x, GROUND-6, 120, 6);
+    }
+  }
+
+  // Airplane drawing (simple Mario-color plane)
+  function drawPlane(p){
+    const bob = Math.sin(t*0.01)*2;
+    const x = p.x, y = p.y + bob;
+    ctx.save();
+    // shadow
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(x, y+14, 36, 10, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // body
+    roundRect(x-30, y-12, 60, 24, 10, '#ff5252'); // red fuselage
+    // cockpit
+    roundRect(x-10, y-10, 16, 14, 6, '#7ad1ff');
+    // wings
+    roundRect(x-40, y+2, 30, 8, 4, '#ffd95a');
+    roundRect(x+10, y-6, 28, 6, 3, '#ffd95a');
+    // tail
+    roundRect(x-32, y-18, 10, 14, 4, '#34d399');
+    // propeller
+    const spin = (t/60)%360;
+    ctx.save();
+    ctx.translate(x+32, y);
+    ctx.rotate(spin);
+    ctx.fillStyle = '#eaeaea';
+    ctx.fillRect(-1, -18, 2, 36);
+    ctx.rotate(Math.PI/2);
+    ctx.fillRect(-1, -14, 2, 28);
+    ctx.restore();
+
+    // dash glow
+    if (dashTime>0){
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x,y, 26, 0, Math.PI*2); ctx.stroke();
+    }
+
+    // invulnerable blink
+    if (p.inv>0 && Math.floor(t/100)%2===0){
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.fillRect(x-36,y-22,72,44);
+    }
+
+    ctx.restore();
+  }
+
+  function roundRect(x,y,w,h,r,fill){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y, x+w,y+h, r);
+    ctx.arcTo(x+w,y+h, x,y+h, r);
+    ctx.arcTo(x,y+h, x,y, r);
+    ctx.arcTo(x,y, x+w,y, r);
+    ctx.closePath();
+    if (fill){ ctx.fillStyle = fill; ctx.fill(); }
+  }
+
+  // Obstacles per biome
+  function spawnObstacle(){
+    const b = env.biome;
+    const yBase = rnd(H*0.2, GROUND-40);
+    let o = { x: W+40, y: yBase, w: 40, h: 40, vx: -(baseScroll*speed + rnd(0,2)), type: 'box', harm: true };
+
+    if (b==='city'){
+      const types = ['building','crane','balloon','drone','bird'];
+      o.type = pick(types);
+      if (o.type==='building'){ o.y = GROUND-120; o.w=60; o.h=120; }
+      if (o.type==='crane'){ o.y = GROUND-150; o.w=80; o.h=12; }
+      if (o.type==='balloon'){ o.w=28; o.h=36; o.y = rnd(H*0.2, H*0.6); o.harm = true; }
+      if (o.type==='drone'){ o.w=34; o.h=24; o.y = rnd(H*0.25,H*0.65); }
+      if (o.type==='bird'){ o.w=30; o.h=22; o.y = rnd(H*0.2,H*0.7); }
+    } else if (b==='mountains'){
+      const types = ['rock','windmill','stalactite','bird'];
+      o.type = pick(types);
+      if (o.type==='rock'){ o.w=46; o.h=36; o.y = GROUND-36; }
+      if (o.type==='windmill'){ o.w=24; o.h=100; o.y = GROUND-100; }
+      if (o.type==='stalactite'){ o.w=24; o.h=48; o.y = rnd(60, 160); o.harm = true; }
+      if (o.type==='bird'){ o.w=28; o.h=20; o.y = rnd(H*0.2,H*0.65); }
+    } else if (b==='forest'){
+      const types = ['tree','branch','bee','balloon'];
+      o.type = pick(types);
+      if (o.type==='tree'){ o.w=40; o.h=110; o.y = GROUND-110; }
+      if (o.type==='branch'){ o.w=70; o.h=12; o.y = rnd(H*0.25, H*0.5); }
+      if (o.type==='bee'){ o.w=22; o.h=16; o.y = rnd(H*0.2,H*0.7); }
+      if (o.type==='balloon'){ o.w=28; o.h=36; o.y = rnd(H*0.2,H*0.6); }
+    } else if (b==='desert'){
+      const types = ['cactus','arch','whirl','vulture'];
+      o.type = pick(types);
+      if (o.type==='cactus'){ o.w=30; o.h=80; o.y = GROUND-80; }
+      if (o.type==='arch'){ o.w=80; o.h=20; o.y = rnd(H*0.3,H*0.55); }
+      if (o.type==='whirl'){ o.w=28; o.h=48; o.y = rnd(H*0.3,H*0.7); }
+      if (o.type==='vulture'){ o.w=34; o.h=20; o.y = rnd(H*0.25,H*0.65); }
+    }
+
+    // Weather amplifiers
+    if (env.weather==='storm'){ o.vx *= 1.15; }
+    if (env.weather==='snow'){ o.vx *= 0.95; }
+
+    obstacles.push(o);
+  }
+
+  function drawObstacle(o){
+    ctx.save();
+    ctx.translate(o.x, o.y);
+
+    // Mario-style simple shapes
+    switch(o.type){
+      case 'building':
+        roundRect(-o.w/2, -o.h, o.w, o.h, 6, '#4f5c8a');
+        ctx.fillStyle = 'rgba(255,255,200,0.3)';
+        for (let yy=-o.h+10; yy<-10; yy+=18){
+          ctx.fillRect(-o.w/2+6, yy, o.w-12, 6);
+        }
+        break;
+      case 'crane':
+        ctx.fillStyle = '#ffcc33';
+        ctx.fillRect(-o.w/2, -o.h/2, o.w, o.h);
+        ctx.fillStyle = '#b37a1a';
+        ctx.fillRect(-4, -o.h/2, 8, o.h+40);
+        break;
+      case 'balloon':
+        roundRect(-14, -18, 28, 28, 14, '#ff6b6b');
+        ctx.strokeStyle = '#aaaaaa'; ctx.beginPath(); ctx.moveTo(0,10); ctx.lineTo(0,30); ctx.stroke();
+        break;
+      case 'drone':
+        roundRect(-14,-10,28,20,6,'#e0e4ee');
+        ctx.fillStyle='#222'; ctx.fillRect(-18,-2,36,4);
+        break;
+      case 'bird':
+        ctx.fillStyle = '#333';
+        ctx.beginPath(); ctx.moveTo(-15,0); ctx.quadraticCurveTo(0,-12, 15,0); ctx.quadraticCurveTo(0,-6, -15,0); ctx.fill();
+        break;
+      case 'rock':
+        roundRect(-23,-18,46,36,8,'#6b6f86');
+        break;
+      case 'windmill':
+        roundRect(-12,-100,24,100,6,'#a7b4cc');
+        drawWindmillBlades(0,-100, t*0.15);
+        break;
+      case 'stalactite':
+        ctx.fillStyle = '#7f8fb1';
+        ctx.beginPath(); ctx.moveTo(-12, -o.h); ctx.lineTo(0,0); ctx.lineTo(12,-o.h); ctx.closePath(); ctx.fill();
+        break;
+      case 'tree':
+        ctx.fillStyle='#7a4d2b'; roundRect(-6,-60,12,60,4,'#7a4d2b');
+        roundRect(-20,-110,40,52,16,'#3aa34f');
+        break;
+      case 'branch':
+        ctx.fillStyle='#7a4d2b'; roundRect(-35,-6,70,12,6,'#7a4d2b');
+        break;
+      case 'bee':
+        roundRect(-11,-8,22,16,6,'#ffd95a');
+        ctx.fillStyle='#333'; ctx.fillRect(-11,-3,22,6);
+        break;
+      case 'cactus':
+        roundRect(-8,-60,16,60,8,'#2bbf6a');
+        roundRect(-18,-40,12,24,6,'#2bbf6a');
+        roundRect(6,-30,12,20,6,'#2bbf6a');
+        break;
+      case 'arch':
+        ctx.fillStyle = '#cf9a4a';
+        ctx.beginPath();
+        ctx.moveTo(-40,0); ctx.lineTo(40,0);
+        ctx.quadraticCurveTo(0,-o.h, -40,0);
+        ctx.fill();
+        break;
+      case 'whirl':
+        ctx.strokeStyle = '#d6a14d'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.arc(0,0, 8, 0, Math.PI*2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(0,0, 14, 0, Math.PI*2); ctx.stroke();
+        break;
+      case 'vulture':
+        ctx.fillStyle='#5b4636';
+        ctx.beginPath(); ctx.moveTo(-17,0); ctx.quadraticCurveTo(0,-10, 17,0); ctx.quadraticCurveTo(0,-4, -17,0); ctx.fill();
+        break;
+    }
+
+    ctx.restore();
+  }
+
+  function drawWindmillBlades(cx, cy, rot){
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    ctx.fillStyle='#e6edf7';
+    for (let i=0;i<4;i++){
+      ctx.rotate(Math.PI/2);
+      roundRect(0,0,8,28,4,'#e6edf7');
+    }
+    ctx.restore();
+  }
+
+  // Decor (non-harmful foreground items like poles, pipes, mushroom hills)
+  function pushDecor(x, r){
+    const types = ['pipe','mushroom','pole','bush'];
+    const type = pick(types);
+    const y = GROUND;
+    const d = {x, y, vx: -(baseScroll*0.6 + rnd(0,1)), type};
+    decor.push(d);
+  }
+
+  function drawDecor(d){
+    ctx.save();
+    ctx.translate(d.x, d.y);
+    switch(d.type){
+      case 'pipe':
+        roundRect(-16,-40,32,40,6,'#2bbf6a');
+        roundRect(-20,-50,40,14,6,'#27a55c');
+        break;
+      case 'mushroom':
+        roundRect(-10,-20,20,20,6,'#ffcc33'); // stalk
+        roundRect(-24,-38,48,24,10,'#ff6b6b'); // cap
+        ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(-10,-26,4,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(12,-30,5,0,Math.PI*2); ctx.fill();
+        break;
+      case 'pole':
+        ctx.fillStyle='#e6edf7'; ctx.fillRect(-2,-60,4,60);
+        ctx.fillStyle='#ff5252'; ctx.fillRect(-6,-60,12,8);
+        break;
+      case 'bush':
+        roundRect(-24,-14,48,14,7,'#34d399');
+        roundRect(-16,-20,32,16,8,'#2fbd89');
+        break;
+    }
+    ctx.restore();
+  }
+
+  // Weather particles
+  function spawnWeather(){
+    if (env.weather==='rain'){
+      for (let i=0;i<6;i++){
+        particles.push({x:rnd(0,W), y:rnd(0,H), vx:-2*speed, vy: rnd(8,12), life:rnd(0.6,1.2), kind:'rain'});
+      }
+    } else if (env.weather==='snow'){
+      for (let i=0;i<3;i++){
+        particles.push({x:rnd(0,W), y:rnd(0,H), vx:rnd(-0.7,0.2)*speed, vy:rnd(0.5,1.4), life:rnd(2,4), kind:'snow'});
+      }
+    } else if (env.weather==='storm'){
+      for (let i=0;i<6;i++){
+        particles.push({x:rnd(0,W), y:rnd(0,H), vx:rnd(-2.5,-0.5)*speed, vy:rnd(10,14), life:rnd(0.4,0.9), kind:'rain'});
+      }
+      // occasional lightning flash
+      if (Math.random()<0.02){
+        flash(120);
+        shake = Math.max(shake, 6);
+      }
+    }
+  }
+
+  function drawParticles(dt){
+    for (let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= dt;
+      if (p.kind==='rain'){
+        ctx.strokeStyle = 'rgba(170,200,255,0.8)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y-6); ctx.lineTo(p.x-2, p.y); ctx.stroke();
+      } else if (p.kind==='snow'){
+        ctx.fillStyle='rgba(255,255,255,0.9)';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
+      } else if (p.kind==='spark'){
+        ctx.fillStyle='rgba(255,255,200,0.9)';
+        ctx.fillRect(p.x,p.y,2,2);
+      }
+      if (p.y>H+10 || p.x<-10 || p.life<=0) particles.splice(i,1);
+    }
+  }
+
+  let flashTime = 0;
+  function flash(ms){ flashTime = ms; }
+  function drawFlash(dt){
+    if (flashTime>0){
+      flashTime -= dt;
+      const a = Math.max(0, Math.min(1, flashTime/120));
+      ctx.fillStyle = `rgba(255,255,255,${0.4*a})`;
+      ctx.fillRect(0,0,W,H);
+    }
+  }
+
+  // Spawn logic timing
+  let obstTimer = 0, obstDelay = 900;
+  let decorTimer = 0, decorDelay = 700;
+
+  // Loop
+  let lastTs = 0;
+  function loop(ts){
+    const dtms = ts - lastTs; lastTs = ts;
+    const dt = dtms/1000;
+    if (!running) return;
+    if (paused){ return; }
+    t += dtms;
+
+    update(dtms, dt);
+    render(dtms, dt);
+
+    requestAnimationFrame(loop);
+  }
+
+  function update(dtms, dt){
+    // Difficulty scaling
+    speed = 1.0 + Math.min(1.2, distance/4000);
+    const scroll = baseScroll*speed;
+
+    // Player input
+    const up = keys['arrowup'] || keys['w'];
+    const down = keys['arrowdown'] || keys['s'];
+    if (up) player.vy -= 0.6;
+    if (down) player.vy += 0.6;
+    // gravity-like smoothing
+    player.vy *= 0.92;
+    player.y += player.vy;
+    player.y = clamp(player.y, H*0.15, GROUND-20);
+
+    if (dashTime>0){
+      dashTime -= dtms;
+      player.inv = Math.max(player.inv, 100);
+    }
+    if (dashCD>0) dashCD -= dtms;
+    if (player.inv>0) player.inv -= dtms;
+
+    // Environment cycles
+    env.cycleTime += dtms;
+    env.weatherTime += dtms;
+    env.biomeTime += dtms;
+    env.seasonTime += dtms;
+
+    if (env.cycleTime > env.cycleDur){
+      env.cycleTime = 0;
+      env.time = TIMES[(TIMES.indexOf(env.time)+1)%TIMES.length];
+    }
+    if (env.weatherTime > env.weatherDur){
+      env.weatherTime = 0;
+      env.weather = pick(WEATHER);
+    }
+    if (env.biomeTime > env.biomeDur){
+      env.biomeTime = 0;
+      env.biome = pick(BIOMES);
+    }
+    if (env.seasonTime > env.seasonDur){
+      env.seasonTime = 0;
+      env.season = SEASONS[(SEASONS.indexOf(env.season)+1)%SEASONS.length];
+    }
+
+    // Spawn decor
+    decorTimer += dtms;
+    if (decorTimer>decorDelay){
+      decorTimer=0;
+      pushDecor(W+40, Math.random());
+    }
+
+    // Spawn obstacles
+    obstTimer += dtms;
+    const targetDelay = clamp(900 - distance*0.03, 420, 900);
+    if (obstTimer>targetDelay){
+      obstTimer = 0;
+      spawnObstacle();
+    }
+
+    // Weather particles
+    if (Math.random()<0.9) spawnWeather();
+
+    // Move things
+    for (let i=decor.length-1;i>=0;i--){
+      decor[i].x += decor[i].vx*speed;
+      if (decor[i].x<-60) decor.splice(i,1);
+    }
+    for (let i=obstacles.length-1;i>=0;i--){
+      obstacles[i].x += obstacles[i].vx;
+      // extra movement flavor
+      if (obstacles[i].type==='bird' || obstacles[i].type==='bee' || obstacles[i].type==='vulture'){
+        obstacles[i].y += Math.sin((t+obstacles[i].x)*0.01)*0.9;
+      }
+      if (obstacles[i].type==='whirl'){
+        obstacles[i].y += Math.sin((t+obstacles[i].x)*0.02)*1.4;
+      }
+      if (obstacles[i].x < -120) obstacles.splice(i,1);
+    }
+
+    // Collisions
+    for (let i=obstacles.length-1;i>=0;i--){
+      if (hit(player, obstacles[i])){
+        if (player.inv>0 || dashTime>0){
+          // destroy obstacle and create sparks
+          for (let k=0;k<12;k++){
+            particles.push({x:obstacles[i].x, y:obstacles[i].y, vx:rnd(-2,2), vy:rnd(-2,2), life:rnd(0.4,0.9), kind:'spark'});
+          }
+          shake = Math.max(shake, 2.5);
+          obstacles.splice(i,1);
+          score += 15;
+        } else {
+          explode(player.x, player.y);
+          endGame();
+          return;
+        }
+      }
+    }
+
+    // Score & distance
+    distance += scroll*dt*20; // arbitrary scaling for meters feel
+    score += (scroll*dt*2)|0;
+
+    // Storm shakes
+    if (env.weather==='storm' && Math.random()<0.02) shake = Math.max(shake, 1.5);
+    if (shake>0) shake -= dt*8;
+
+    // UI
+    scorePill.textContent = `Score: ${score|0}`;
+    distPill.textContent = `Distance: ${distance|0}m`;
+    speedPill.textContent = `Speed: ${speed.toFixed(2)}x`;
+    envPill.textContent = `${cap(env.biome)} • ${cap(env.time)} • ${cap(env.weather)} • ${cap(env.season)}`;
+  }
+
+  function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+
+  function hit(a,b){
+    const ax=a.x-a.w/2, ay=a.y-a.h/2, aw=a.w, ah=a.h;
+    const bx=b.x-b.w/2, by=b.y-b.h/2, bw=b.w, bh=b.h;
+    return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+  }
+
+  function explode(x,y){
+    for (let i=0;i<60;i++){
+      particles.push({x, y, vx:rnd(-3,3), vy:rnd(-3,3), life:rnd(0.4,1), kind:'spark'});
+    }
+    flash(180);
+    shake = 8;
+  }
+
+  function endGame(){
+    running = false; gameover = true;
+    gameoverOverlay.style.display = 'flex';
+    finalStats.textContent = `Score ${score|0} • Distance ${distance|0}m`;
+  }
+
+  function dash(){
+    if (dashCD>0) return;
+    dashTime = 260; // ms of dash
+    dashCD = 1100;  // cooldown
+    // forward burst
+    for (let i=0;i<24;i++){
+      particles.push({x:player.x-12, y:player.y, vx:rnd(-2,-0.6), vy:rnd(-1,1), life:rnd(0.2,0.6), kind:'spark'});
+    }
+    shake = Math.max(shake, 2);
+    score += 10;
+  }
+
+  function render(dtms, dt){
+    // camera shake
+    const sx = shake>0 ? rnd(-shake,shake) : 0;
+    const sy = shake>0 ? rnd(-shake,shake) : 0;
+
+    // Background sky
+    ctx.save();
+    ctx.fillStyle = skyGradient(env.time, env.season);
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+
+    // Sun/moon
+    drawSunMoon();
+
+    // Parallax
+    drawParallax(env.biome, env.season, env.time, t);
+
+    // Ground
+    drawGround(env.biome, env.season);
+
+    // Decor
+    for (const d of decor) drawDecor(d);
+
+    // Weather particles behind plane
+    drawParticles(dt);
+
+    // Player
+    drawPlane(player);
+
+    // Obstacles foreground
+    for (const o of obstacles) drawObstacle(o);
+
+    // HUD helper glows
+    drawFlash(dtms);
+
+    // Night stars
+    if (env.time==='night'){
+      drawStars();
+    }
+  }
+
+  function drawSunMoon(){
+    const phase = env.cycleTime/env.cycleDur; // 0..1
+    const y = lerp(H*0.2, H*0.05, Math.sin(phase*Math.PI));
+    ctx.save();
+    if (env.time==='night'){
+      ctx.fillStyle = '#f0f4ff';
+      ctx.beginPath(); ctx.arc(W*0.82, y, 28, 0, Math.PI*2); ctx.fill();
+    } else {
+      ctx.fillStyle = '#ffe266';
+      ctx.beginPath(); ctx.arc(W*0.18, y, 32, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawStars(){
+    ctx.save();
+    ctx.fillStyle='rgba(255,255,255,0.8)';
+    for (let i=0;i<80;i++){
+      const x = (i*13 + (10000 - t*0.02)) % W;
+      const y = (i*37 % (H*0.6));
+      ctx.fillRect(x, y, 2, 2);
+    }
+    ctx.restore();
+  }
+
+  function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
+
+  // Start game
+  init();
+})();
+</script>
+</body>
+</html>
